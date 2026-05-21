@@ -1,21 +1,27 @@
-#include <SPI.h>
-#include <MFRC522.h>
-#include <Keypad.h>
-#include <IRremote.hpp>
+#include <SPI.h>          // SPI communication library
+#include <MFRC522.h>      // RFID library
+#include <Keypad.h>       // Keypad library
+#include <IRremote.hpp>   // IR remote library
 
+// RFID module pins
 #define RFID_SS_PIN   10
 #define RFID_RST_PIN  9
 
+// Create RFID object
 MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
 
+// IR receiver pin
 #define IR_PIN A1
 
+// LED pins
 #define GREEN_LED A3
 #define RED_LED   A2
 
+// Keypad size
 const byte ROWS = 4;
 const byte COLS = 4;
 
+// Keypad button layout
 char keys[ROWS][COLS] = {
   {'1', '2', '3', 'A'},
   {'4', '5', '6', 'B'},
@@ -23,279 +29,236 @@ char keys[ROWS][COLS] = {
   {'*', '0', '#', 'D'}
 };
 
-// Keypad pins
-byte rowPins[ROWS] = {8, 7, 6, 5};   // R1, R2, R3, R4
-byte colPins[COLS] = {4, 3, 2, A0};     // C1, C2, C3, C4
+// Keypad row pins
+byte rowPins[ROWS] = {8, 7, 6, 5};
 
+// Keypad column pins
+byte colPins[COLS] = {4, 3, 2, A0};
+
+// Create keypad object
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
-// makeKeymap() function of the Keypad library using they previously defined keys array
-// rowPins is the array holding the pin numbers of the row pins
-// colPins is the array holding the pin numbers of the column pins
-// ROWS is the number of rows in the keypad
-// COLS is the number of columns in the keypad
+// makeKeymap() creates keypad layout
+// rowPins stores row pin numbers
+// colPins stores column pin numbers
+// ROWS is total rows
+// COLS is total columns
 
+// System states
 enum SystemState {
   WAITING_CODE,
   LOCKED,
   UNLOCKED
 };
 
+// Current system state
 SystemState state = WAITING_CODE;
 
-// code storage
-String lockCode = "";       // final saved password
-String keypadBuffer = "";   // temporary input from keypad before pressing #
-String irBuffer = "";       // temporary input from IR remote used to unlock
+// Password variables
+String lockCode = "";       // saved password
+String keypadBuffer = "";   // keypad input buffer
+String irBuffer = "";       // IR remote input buffer
 
-// led timer
+// LED blinking variables
 unsigned long lastBlinkTime = 0;
 bool blinkState = false;
 
-// set system state
+// Function to change system state
 void setState(SystemState newState) {
+
+  // Save new state
   state = newState;
 
+  // WAITING_CODE state
   if (state == WAITING_CODE) {
-    rfid.PCD_AntennaOff(); // turns off RFID antenna
+
+    // Turn RFID antenna off
+    rfid.PCD_AntennaOff();
+
     Serial.println("STATE, WAITING_CODE");
   }
 
+  // LOCKED state
   else if (state == LOCKED) {
-    rfid.PCD_AntennaOff(); // turns off RFID antenna
+
+    // Turn RFID antenna off
+    rfid.PCD_AntennaOff();
+
+    // Green LED OFF
     digitalWrite(GREEN_LED, LOW);
+
+    // Red LED ON
     digitalWrite(RED_LED, HIGH);
+
     Serial.println("STATE, LOCKED");
   }
 
+  // UNLOCKED state
   else if (state == UNLOCKED) {
-    rfid.PCD_AntennaOn(); // turns on RFID antenna
+
+    // Turn RFID antenna ON
+    rfid.PCD_AntennaOn();
+
+    // Green LED ON
     digitalWrite(GREEN_LED, HIGH);
+
+    // Red LED OFF
     digitalWrite(RED_LED, LOW);
+
     Serial.println("STATE, UNLOCKED");
   }
 }
 
-// update led patterns
+// Function to update LED behavior
 void updateLEDs() {
+
+  // Waiting mode LED blinking
   if (state == WAITING_CODE) {
+
+    // Blink every 500 ms
     if (millis() - lastBlinkTime >= 500) {
+
+      // Save current time
       lastBlinkTime = millis();
+
+      // Change blink state
       blinkState = !blinkState;
 
+      // Alternate LEDs
       digitalWrite(GREEN_LED, blinkState);
       digitalWrite(RED_LED, !blinkState);
     }
   }
 
+  // Locked mode LEDs
   else if (state == LOCKED) {
+
+    // Green OFF
     digitalWrite(GREEN_LED, LOW);
+
+    // Red ON
     digitalWrite(RED_LED, HIGH);
   }
 
+  // Unlocked mode LEDs
   else if (state == UNLOCKED) {
+
+    // Green ON
     digitalWrite(GREEN_LED, HIGH);
+
+    // Red OFF
     digitalWrite(RED_LED, LOW);
   }
 }
 
-// RFID success flash
+// Function for RFID success flash
 void flashRFIDRead() {
+
+  // Repeat 3 times
   for (int i = 0; i < 3; i++) {
+
+    // Turn both LEDs ON
     digitalWrite(GREEN_LED, HIGH);
     digitalWrite(RED_LED, HIGH);
+
     delay(120);
 
+    // Turn both LEDs OFF
     digitalWrite(GREEN_LED, LOW);
     digitalWrite(RED_LED, LOW);
+
     delay(120);
   }
 
+  // Restore normal LED state
   updateLEDs();
 }
 
-// error flash
+// Function for error flashing
 void flashError() {
+
+  // Repeat 3 times
   for (int i = 0; i < 3; i++) {
+
+    // Turn red LED ON
     digitalWrite(RED_LED, HIGH);
+
     delay(150);
+
+    // Turn red LED OFF
     digitalWrite(RED_LED, LOW);
+
     delay(150);
   }
 
+  // Restore normal LED state
   updateLEDs();
 }
 
-// keypad handle
+// Function to handle keypad input
 void handleKeypad() {
+
+  // Read keypad button
   char key = keypad.getKey();
 
+  // Stop if no key pressed
   if (!key) return;
 
-  // keypad is used only when system is NOT locked
+  // Ignore keypad if system is locked
   if (state == LOCKED) return;
 
-  // // NEED TO BE REMOVED!!!!!!!!!!!
-  // if (key) {
-  //   Serial.print("RAW_KEY,");
-  //   Serial.println(key);
-  }
-  //
-
+  // If pressed key is a number
   if (key >= '0' && key <= '9') {
+
+    // Limit password length to 4 digits
     if (keypadBuffer.length() < 4) {
+
+      // Add digit to buffer
       keypadBuffer += key;
+
       Serial.print("KEYPAD_DIGIT,");
       Serial.println(key);
     }
   }
 
-  // for clearing
+  // Clear input with *
   else if (key == '*') {
+
+    // Clear keypad buffer
     keypadBuffer = "";
+
     Serial.println("KEYPAD_CLEAR");
   }
 
-  // for confirming
+  // Confirm password with #
   else if (key == '#') {
+
+    // Check if exactly 4 digits entered
     if (keypadBuffer.length() == 4) {
+
+      // Save password
       lockCode = keypadBuffer;
+
+      // Clear buffer
       keypadBuffer = "";
 
       Serial.print("LOCK_CODE_SET,");
       Serial.println(lockCode);
 
+      // Change state to LOCKED
       setState(LOCKED);
     } 
+    
     else {
+
+      // Show error message
       Serial.println("ERROR,ENTER_4_DIGITS_FIRST");
+
+      // Flash error LEDs
       flashError();
+
+      // Clear buffer
       keypadBuffer = "";
     }
   }
-}
-
-// map IR remote buttons sends hexadecimal command
-// these command values are common for Keyes IR remote
-// if your remote is different, open Serial Monitor and check IR_COMMAND output
-char irCommandToDigit(uint8_t command) {
-  switch (command) {
-    case 0x16: return '0';
-    case 0x0C: return '1';
-    case 0x18: return '2';
-    case 0x5E: return '3';
-    case 0x08: return '4';
-    case 0x1C: return '5';
-    case 0x5A: return '6';
-    case 0x42: return '7';
-    case 0x52: return '8';
-    case 0x4A: return '9';
-    default: return '\0';
-  }
-}
-
-// IR handling 
-void handleIR() {
-  if (IrReceiver.decode()) {
-    uint8_t command = IrReceiver.decodedIRData.command;
-
-    Serial.print("IR_COMMAND,0x");
-    Serial.println(command, HEX);
-
-    // Ignore repeat signal when button is held
-    if (!(IrReceiver.decodedIRData.flags & IRDATA_FLAGS_IS_REPEAT)) {
-
-      if (state == LOCKED) {
-        char digit = irCommandToDigit(command); // converts IR command into digit
-
-        if (digit != '\0') {
-          irBuffer += digit;
-
-          Serial.print("IR_DIGIT,");
-          Serial.println(digit);
-
-          if (irBuffer.length() == 4) {
-            if (irBuffer == lockCode) {
-              Serial.println("UNLOCK_SUCCESS");
-              irBuffer = "";
-              setState(UNLOCKED);
-            } 
-            else {
-              Serial.println("UNLOCK_FAILED");
-              irBuffer = "";
-              flashError();
-            }
-          }
-        }
-      }
-    }
-
-    IrReceiver.resume();
-  }
-}
-
-// RFID UID to string
-String getUIDString() {
-  String uidString = "";
-
-  for (byte i = 0; i < rfid.uid.size; i++) { // 4-7 bytes usually
-    if (rfid.uid.uidByte[i] < 0x10) {
-      uidString += "0";
-    }
-
-    uidString += String(rfid.uid.uidByte[i], HEX); // adds the current UID byte in hexadecimal format
-
-    if (i < rfid.uid.size - 1) {
-      uidString += ":";
-    }
-  }
-
-  uidString.toUpperCase();
-  return uidString;
-}
-
-// RFID handling
-void handleRFID() {
-  // RFID works only in unlocked state
-  if (state != UNLOCKED) return;
-
-  if (!rfid.PICC_IsNewCardPresent()) return;  // if no card is present, stop
-  if (!rfid.PICC_ReadCardSerial()) return;    // if reading fails, stop
-
-  String uid = getUIDString(); // converts UID to text format
-
-  Serial.print("TAG,");
-  Serial.println(uid);
-  // send to serial monitor + GUI
-  flashRFIDRead();
-
-  rfid.PICC_HaltA();      // stops communication with the current RFID card
-  rfid.PCD_StopCrypto1(); // stops encryption/communication session with the card
-}
-
-void setup() {
-  Serial.begin(9600);
-
-  pinMode(GREEN_LED, OUTPUT);
-  pinMode(RED_LED, OUTPUT);
-
-  SPI.begin();
-  rfid.PCD_Init();
-
-  IrReceiver.begin(IR_PIN, ENABLE_LED_FEEDBACK); // start IR receiver on IR_PIN and enable feedback LED when signal is received
-
-  setState(WAITING_CODE); // start system in waiting mode, ready to receive keypad code
-
-  Serial.println("SYSTEM_READY");
-  Serial.println("Use keypad: enter 4 digits, then press # to lock.");
-  Serial.println("Use IR remote: enter same 4 digits to unlock.");
-  Serial.println("RFID works only when system is unlocked.");
-}
-
-void loop() {
-  updateLEDs();
-
-  handleKeypad();
-  handleIR();
-  handleRFID();
 }
